@@ -1,42 +1,16 @@
-# Nuxt 3 Minimal Starter
+# АПОЖ
 
-Look at the [Nuxt 3 documentation](https://nuxt.com/docs/getting-started/introduction) to learn more.
+Party game: one player secretly sings a song, the recording is played backwards, another player imitates the backwards audio, that imitation is reversed again and everyone guesses the song.
 
-## Setup
-
-Make sure to install the dependencies:
+Static site, no build step. Open `index.html` through any web server (microphone access needs `https` or `localhost`):
 
 ```bash
-# yarn
-yarn install
-
-# npm
-npm install
-
-# pnpm
-pnpm install --shamefully-hoist
+python3 -m http.server 8000
 ```
 
-## Development Server
+Built for a laptop connected to a TV: everything is controlled with the keyboard (shortcuts are shown on the buttons).
 
-Start the development server on http://localhost:3000
-
-```bash
-npm run dev
-```
-
-## Production
-
-Build the application for production:
-
-```bash
-npm run build
-```
-
-Locally preview production build:
-
-```bash
-npm run preview
-```
-
-Check out the [deployment documentation](https://nuxt.com/docs/getting-started/deployment) for more information.
+- `app.js`: game flow and screens
+- `ui.js`: DOM helpers, keyboard shortcuts, widgets (recorder, waveform, confetti)
+- `audio.js`: microphone capture, reverse, playback, jingles
+- `songs.js`: song deck by category
