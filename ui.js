@@ -15,7 +15,7 @@ export function el(tag, props, ...children) {
       }
     }
     else if (key === 'dataset') Object.assign(node.dataset, value);
-    else if (key in node && typeof value !== 'string') node[key] = value;
+    else if (key in node && (typeof value !== 'string' || key === 'value')) node[key] = value;
     else node.setAttribute(key, value === true ? '' : value);
   }
   for (const child of children.flat(Infinity)) {
@@ -43,6 +43,7 @@ export function show(build) {
   for (const fn of cleanups.splice(0)) fn();
   keymap = new Map();
   closeModal();
+  stopConfetti();
   const nodes = build();
   app().replaceChildren(el('div', { class: 'screen' }, nodes));
   window.scrollTo(0, 0);
@@ -116,6 +117,10 @@ export function openModal(content, { onEscape } = {}) {
   overlay.replaceChildren(el('div', { class: 'modal-backdrop', onclick: (e) => { if (e.target === e.currentTarget) onEscape?.(); } },
     el('div', { class: 'modal' }, body)));
   overlay.classList.add('open');
+}
+
+export function isModalOpen() {
+  return modalKeymap != null;
 }
 
 export function closeModal() {
@@ -203,8 +208,7 @@ export function playButton(label, buffer, { tag, key, variant = 'secondary', onP
     key, variant, cls: `btn-play ${cls}`, icon: '▶',
     onClick: () => {
       if (audio.playingTag() === tag) { audio.stop(); return; }
-      audio.play(typeof buffer === 'function' ? buffer() : buffer, { tag });
-      onPlay?.();
+      if (audio.play(typeof buffer === 'function' ? buffer() : buffer, { tag })) onPlay?.();
     },
   });
   const icon = btn.querySelector('.btn-icon');
@@ -340,6 +344,8 @@ export function countdown(seconds, onDone) {
     overlay.remove();
   };
   const tick = () => {
+    // Hold the count while the pause menu is open.
+    if (isModalOpen()) { timer = setTimeout(tick, 250); return; }
     if (n === 0) {
       finish();
       audio.jingle('go');
@@ -357,6 +363,13 @@ export function countdown(seconds, onDone) {
 }
 
 let confettiRaf = 0;
+
+export function stopConfetti() {
+  cancelAnimationFrame(confettiRaf);
+  confettiRaf = 0;
+  const canvas = document.getElementById('confetti');
+  canvas?.getContext('2d').clearRect(0, 0, canvas.width, canvas.height);
+}
 
 export function confetti({ count = 180, duration = 4200 } = {}) {
   const canvas = document.getElementById('confetti');

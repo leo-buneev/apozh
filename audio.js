@@ -23,7 +23,15 @@ function emit() {
   for (const fn of listeners) fn(current);
 }
 
+let recordingSessions = 0;
+
+export function isRecording() {
+  return recordingSessions > 0;
+}
+
+// Playback is refused while the mic is open: speakers would bleed into the take.
 export function play(buffer, { tag = null, onEnd } = {}) {
+  if (isRecording()) return false;
   stop();
   const ac = getContext();
   const source = ac.createBufferSource();
@@ -39,6 +47,7 @@ export function play(buffer, { tag = null, onEnd } = {}) {
   current = entry;
   source.start();
   emit();
+  return true;
 }
 
 export function stop() {
@@ -95,6 +104,15 @@ export async function startRecording({ onLevel } = {}) {
   } catch (e) {
     throw new MicError(e?.name || 'unknown', e);
   }
+  try {
+    return await captureStream(ac, stream, onLevel);
+  } catch (e) {
+    stream.getTracks().forEach((t) => t.stop());
+    throw e;
+  }
+}
+
+async function captureStream(ac, stream, onLevel) {
   if (ac.state !== 'running') await ac.resume();
 
   const source = ac.createMediaStreamSource(stream);
@@ -120,7 +138,9 @@ export async function startRecording({ onLevel } = {}) {
   // ScriptProcessor is the fallback for old browsers.
   let node;
   if (await loadCaptureWorklet(ac)) {
-    node = new AudioWorkletNode(ac, 'apozh-capture', { numberOfInputs: 1, numberOfOutputs: 1, channelCount: 1 });
+    node = new AudioWorkletNode(ac, 'apozh-capture', {
+      numberOfInputs: 1, numberOfOutputs: 1, channelCount: 1, channelCountMode: 'explicit',
+    });
     node.port.onmessage = (e) => onChunk(e.data);
   } else {
     node = ac.createScriptProcessor(4096, 1, 1);
@@ -129,10 +149,12 @@ export async function startRecording({ onLevel } = {}) {
   source.connect(node);
   node.connect(sink);
   sink.connect(ac.destination);
+  recordingSessions++;
 
   function close() {
     closed = true;
-    if (node.port) node.port.onmessage = null;
+    recordingSessions--;
+    if (node.port) { node.port.onmessage = null; node.port.postMessage('stop'); }
     else node.onaudioprocess = null;
     try { source.disconnect(); node.disconnect(); sink.disconnect(); } catch {}
     stream.getTracks().forEach((t) => t.stop());
@@ -156,8 +178,15 @@ export async function startRecording({ onLevel } = {}) {
 // Posts mono input in ~2048-sample blocks to the main thread.
 const CAPTURE_WORKLET = `
 class Capture extends AudioWorkletProcessor {
-  constructor() { super(); this.buf = new Float32Array(2048); this.n = 0; }
+  constructor() {
+    super();
+    this.buf = new Float32Array(2048);
+    this.n = 0;
+    this.alive = true;
+    this.port.onmessage = () => { this.alive = false; };
+  }
   process(inputs) {
+    if (!this.alive) return false;
     const ch = inputs[0] && inputs[0][0];
     if (ch) {
       for (let i = 0; i < ch.length; i++) {

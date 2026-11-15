@@ -111,7 +111,7 @@ body::after {
 .logo-letter:nth-child(2) { color: var(--yellow); }
 .logo-letter:nth-child(3) { color: var(--cyan); }
 .logo-letter:nth-child(4) { color: var(--lime); }
-.logo-lg { font-size: 8.5rem; filter: drop-shadow(0 .5rem 0 rgba(0,0,0,.35)); }
+.logo-lg { font-size: 7.4rem; filter: drop-shadow(0 .5rem 0 rgba(0,0,0,.35)); }
 .logo-lg .logo-letter { animation: bob 2.6s ease-in-out infinite; animation-delay: calc(var(--i) * -.35s); }
 .logo-lg .logo-letter:nth-child(odd) { rotate: -6deg; }
 .logo-lg .logo-letter:nth-child(even) { rotate: 5deg; }
@@ -409,7 +409,7 @@ kbd {
 .btn-player .avatar-sm { width: 2.4rem; height: 2.4rem; font-size: 1.5rem; }
 
 .countdown {
-  position: fixed; inset: 0; z-index: 50; display: grid; place-items: center;
+  position: fixed; inset: 0; z-index: 35; display: grid; place-items: center;
   background: rgba(23, 10, 54, .55); backdrop-filter: blur(6px); -webkit-backdrop-filter: blur(6px);
 }
 .countdown-num {

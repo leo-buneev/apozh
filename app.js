@@ -39,7 +39,7 @@ function saveSettings() {
 // ---------- Songs ----------
 
 const MIN_PLAYERS = 3;
-const MAX_PLAYERS = 12;
+const MAX_PLAYERS = 10; // keeps guessers within the 1–8 digit shortcuts
 const SINGER_MAX_SECONDS = 20;
 const MIMIC_MAX_SECONDS = 30;
 
@@ -513,7 +513,7 @@ function screenGuess(round, autoplay) {
       el('h1', { class: 'title title-xl wobble' }, 'Что это за песня? 🤔'),
       el('div', { class: 'card result-card' },
         waveform(round.result, { tag: 'result', height: 140, bars: 160 }),
-        el('div', { class: 'row center' }, playButton('Ещё раз', round.result, { tag: 'result', key: 'KeyP' }))),
+        el('div', { class: 'row center' }, playButton('Ещё раз', round.result, { tag: 'result', key: 'KeyP', onPlay: () => stopCountdown?.() }))),
       el('div', { class: 'guess-who' },
         el('h3', {}, 'Кто угадал первым? ', el('span', { class: 'muted' }, 'Решает ', singer.name)),
         el('div', { class: 'guess-buttons' },
@@ -525,7 +525,8 @@ function screenGuess(round, autoplay) {
           })),
           button('Никто не угадал', { key: 'Digit0', variant: 'ghost', icon: '🙈', onClick: () => choose(null) }))))]);
 
-  if (autoplay) countdown(3, () => audio.play(round.result, { tag: 'result' }));
+  let stopCountdown = null;
+  if (autoplay) stopCountdown = countdown(3, () => audio.play(round.result, { tag: 'result' }));
 }
 
 // ---------- Screen: reveal ----------
@@ -562,10 +563,11 @@ function screenReveal(round, fresh) {
     el('footer', { class: 'bottom' }, scoreboard({ highlight: fresh ? winners : [] }))]);
 
   if (fresh) {
-    setTimeout(() => {
+    const timer = setTimeout(() => {
       audio.jingle(guessed ? 'win' : 'fail');
       if (guessed) confetti();
     }, 900);
+    onLeave(() => clearTimeout(timer));
   }
 }
 
@@ -585,6 +587,8 @@ function screenFinal() {
   const podium = order.slice(0, 3);
   const rest = order.slice(3);
   const places = ['🥇', '🥈', '🥉'];
+  // Ties share the higher place; nobody gets a medal for zero points.
+  const medal = (i) => (sc[i] > 0 ? places[order.findIndex((j) => sc[j] === sc[i])] ?? '' : '');
 
   show(() => [
     el('header', { class: 'topbar' },
@@ -599,16 +603,14 @@ function screenFinal() {
           const i = podium[place];
           if (i == null) return el('div', { class: 'podium-slot empty' });
           const p = game.players[i];
-          // Ties share the higher place.
-          const rank = order.findIndex((j) => sc[j] === sc[i]);
           return el('div', { class: `podium-slot place-${place + 1}`, style: { '--c': p.color } },
-            el('div', { class: 'podium-medal' }, places[rank] ?? ''),
+            el('div', { class: 'podium-medal' }, medal(i)),
             avatar(p, place === 0 ? 'xl' : 'lg'),
             el('div', { class: 'podium-name' }, p.name),
             el('div', { class: 'podium-points' }, sc[i], ' ', plural(sc[i], 'очко', 'очка', 'очков')),
             el('div', { class: 'podium-block' }, place + 1));
         })),
-      rest.length ? el('div', { class: 'rest' }, rest.map((i) => el('div', { class: 'rest-item' }, playerTag(game.players[i]), el('b', {}, sc[i])))) : null,
+      rest.length ? el('div', { class: 'rest' }, rest.map((i) => el('div', { class: 'rest-item' }, medal(i), playerTag(game.players[i]), el('b', {}, sc[i])))) : null,
       awards(rounds),
       rounds.length
         ? el('div', { class: 'highlights' },
