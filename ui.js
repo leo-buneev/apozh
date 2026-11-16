@@ -1,6 +1,7 @@
 // UI toolkit: DOM builder, screen switching, keyboard shortcuts and reusable widgets.
 
 import * as audio from './audio.js';
+import { YOUTUBE } from './youtube.js';
 
 export function el(tag, props, ...children) {
   const node = document.createElement(tag);
@@ -109,13 +110,13 @@ export function button(label, { onClick, key, variant = 'secondary', icon, disab
 
 // ---------- Modal ----------
 
-export function openModal(content, { onEscape } = {}) {
+export function openModal(content, { onEscape, cls = '' } = {}) {
   modalKeymap = new Map();
   if (onEscape) modalKeymap.set('Escape', onEscape);
   const overlay = document.getElementById('overlay');
   const body = typeof content === 'function' ? content() : content;
   overlay.replaceChildren(el('div', { class: 'modal-backdrop', onclick: (e) => { if (e.target === e.currentTarget) onEscape?.(); } },
-    el('div', { class: 'modal' }, body)));
+    el('div', { class: `modal ${cls}` }, body)));
   overlay.classList.add('open');
 }
 
@@ -460,4 +461,41 @@ export function songCard(song, { cls = '' } = {}) {
     el('div', { class: 'song-title' }, title),
     lyric ? el('div', { class: 'song-lyric' }, '«', lyric, '»') : null,
     artist ? el('div', { class: 'song-artist' }, artist) : null);
+}
+
+// ---------- YouTube ----------
+
+// { id, start, embed } for songs from the deck; custom songs fall back to a YouTube search.
+export function youtubeInfo(song) {
+  const v = YOUTUBE[song];
+  return v ? { id: v[0], start: v[1], embed: v[2] !== false } : null;
+}
+
+export function openYoutube(song) {
+  audio.stop();
+  const { title, artist, lyric } = parseSong(song);
+  const info = youtubeInfo(song);
+  if (!info) {
+    window.open(`https://www.youtube.com/results?search_query=${encodeURIComponent(`${artist} ${title}`.trim())}`, '_blank', 'noopener');
+    return;
+  }
+  const watch = `https://www.youtube.com/watch?v=${info.id}&t=${info.start}s`;
+  if (!info.embed) {
+    window.open(watch, '_blank', 'noopener');
+    return;
+  }
+  openModal(() => [
+    el('div', { class: 'yt-head' }, el('b', {}, title), artist ? el('span', { class: 'muted' }, artist) : null),
+    el('div', { class: 'yt-frame' }, el('iframe', {
+      src: `https://www.youtube-nocookie.com/embed/${info.id}?start=${info.start}&autoplay=1&rel=0&playsinline=1`,
+      allow: 'autoplay; encrypted-media; fullscreen; picture-in-picture', allowFullscreen: true, title,
+    })),
+    el('div', { class: 'yt-foot' },
+      el('a', { href: watch, target: '_blank', rel: 'noopener', class: 'muted' }, info.start ? `С самого популярного места (${Math.floor(info.start / 60)}:${String(info.start % 60).padStart(2, '0')}). Не играет? Открыть на YouTube` : 'Не играет? Открыть на YouTube'),
+      modalButton('Закрыть', { key: 'Escape', variant: 'primary', onClick: closeModal })),
+  ], { onEscape: closeModal, cls: 'modal-wide' });
+}
+
+export function youtubeButton(song, { key, label = 'YouTube' } = {}) {
+  return button(label, { key, variant: 'ghost', icon: '📺', cls: 'btn-yt', onClick: () => openYoutube(song) });
 }

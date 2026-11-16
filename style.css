@@ -779,3 +779,17 @@ html.phone body { font-size: 1rem; }
 .piece.done { color: var(--lime); box-shadow: inset 0 0 0 2px rgba(140, 255, 107, .55); }
 .piece.current { background: var(--cyan); color: #10223a; box-shadow: 0 0 1rem rgba(61, 224, 255, .5); }
 .mode-switch button { white-space: nowrap; }
+
+/* ---------- YouTube player ---------- */
+
+.modal-wide { width: min(92vw, 72rem); min-width: 0; }
+.yt-head { display: flex; flex-direction: column; gap: .2rem; }
+.yt-head b { font-family: var(--display); font-size: 1.6rem; }
+.yt-frame { position: relative; width: 100%; aspect-ratio: 16 / 9; border-radius: 1.2rem; overflow: hidden; background: #000; }
+.yt-frame iframe { position: absolute; inset: 0; width: 100%; height: 100%; border: 0; }
+.yt-foot { display: flex; align-items: center; justify-content: space-between; gap: 1rem; flex-wrap: wrap; }
+.yt-foot a { font-size: .95rem; }
+@media (max-width: 640px) {
+  .modal-wide { width: calc(100vw - 1rem); padding: 1rem; }
+  .yt-head b { font-size: 1.2rem; }
+}

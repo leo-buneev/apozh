@@ -10,7 +10,7 @@ import { WebSocketServer } from 'ws';
 
 const PORT = Number(process.env.PORT) || 8080;
 const ROOT = fileURLToPath(new URL('.', import.meta.url));
-const PUBLIC_FILES = new Set(['index.html', 'app.js', 'ui.js', 'audio.js', 'songs.js', 'net.js', 'phone.js', 'style.css', 'vendor/qrcode.mjs']);
+const PUBLIC_FILES = new Set(['index.html', 'app.js', 'ui.js', 'audio.js', 'songs.js', 'youtube.js', 'net.js', 'phone.js', 'style.css', 'vendor/qrcode.mjs']);
 const MIME = { '.html': 'text/html; charset=utf-8', '.js': 'text/javascript; charset=utf-8', '.mjs': 'text/javascript; charset=utf-8', '.css': 'text/css; charset=utf-8' };
 const ROOM_TTL_MS = 6 * 60 * 60 * 1000; // a room survives a TV reload or a short outage
 const MAX_MESSAGE_BYTES = 8 * 1024 * 1024; // a 30 s recording is well under 2 MB

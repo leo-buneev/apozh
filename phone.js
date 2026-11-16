@@ -2,7 +2,7 @@
 // records it away from the room and sends the take to the TV.
 
 import * as audio from './audio.js';
-import { el, show, button, playButton, waveform, recorder, avatar, logo, songCard } from './ui.js';
+import { el, show, button, playButton, waveform, recorder, avatar, logo, songCard, youtubeButton } from './ui.js';
 import { Link, newPeerId } from './net.js';
 
 const SEND_TIMEOUT_MS = 25_000;
@@ -249,10 +249,12 @@ export function startPhone(code) {
     frame(
       el('div', { class: 'secret-label' }, '🤫 Только для тебя'),
       songCard(job.song, { cls: 'pop-in' }),
-      button(skipping ? 'Ищем другую…' : 'Не знаю эту, другую', {
-        variant: 'ghost', icon: '🎲', disabled: skipping || Boolean(take),
-        onClick: () => { skipping = true; toHost({ t: 'skip', round: job.round }); render(); },
-      }),
+      el('div', { class: 'phone-actions' },
+        button(skipping ? 'Ищем…' : 'Другую', {
+          variant: 'ghost', icon: '🎲', disabled: skipping || Boolean(take),
+          onClick: () => { skipping = true; toHost({ t: 'skip', round: job.round }); render(); },
+        }),
+        youtubeButton(job.song, { label: 'Напомнить' })),
       el('p', { class: 'muted center' }, 'Уйди туда, где тебя не слышно, и спой 10–15 секунд самого узнаваемого места, со словами.'),
       recorder({
         maxSeconds: job.maxSeconds || 20,

@@ -4,7 +4,7 @@
 import * as audio from './audio.js';
 import {
   el, show, button, playButton, waveform, recorder, avatar, playerTag, openModal, closeModal,
-  modalButton, countdown, confetti, logo, plural, kbd, onLeave, bindKey, parseSong, songCard, PLAYER_COLORS, PLAYER_EMOJIS,
+  modalButton, countdown, confetti, logo, plural, kbd, onLeave, bindKey, youtubeButton, parseSong, songCard, PLAYER_COLORS, PLAYER_EMOJIS,
 } from './ui.js';
 import { SONG_CATEGORIES } from './songs.js';
 import { HAS_SERVER, createHost, qrSvg } from './net.js';
@@ -617,7 +617,9 @@ function screenSinger(round) {
       el('div', { class: 'singer-layout' },
         el('div', { class: 'singer-song' },
           songCard(round.song, { cls: 'pop-in' }),
-          button('Не знаю эту, другую', { key: 'KeyS', variant: 'ghost', icon: '🎲', onClick: changeSong })),
+          el('div', { class: 'row center' },
+            button('Не знаю эту, другую', { key: 'KeyS', variant: 'ghost', icon: '🎲', onClick: changeSong }),
+            youtubeButton(round.song, { key: 'KeyY', label: 'Напомнить мотив' }))),
         el('div', { class: 'singer-rec' },
           recorder({
             maxSeconds: SINGER_MAX_SECONDS,
@@ -825,6 +827,7 @@ function screenReveal(round, fresh) {
         compareItem('Попытка', `${mimic.name} как есть`, round.attempt, 'attempt', 'KeyA', 'secondary', 'wave-alt')),
       el('div', { class: 'reveal-actions' },
         button('Изменить ответ', { key: 'Backspace', variant: 'ghost', onClick: () => screenGuess(round, false) }),
+        youtubeButton(round.song, { key: 'KeyY', label: 'Оригинал на YouTube' }),
         button(last ? 'Итоги' : 'Следующий раунд', { key: 'Enter', variant: 'primary', cls: 'btn-xl', icon: last ? '🏆' : '➡️', onClick: nextRound }))),
     el('footer', { class: 'bottom' }, scoreboard({ highlight: fresh ? winners : [] }))]);
 
@@ -931,7 +934,8 @@ function highlightCard(round, k) {
       ' · ', isGuessed(round) ? `угадал(а) ${game.players[round.guessedBy].name}` : 'не угадали'),
     el('div', { class: 'row' },
       round.original ? playButton('Оригинал', round.original, { tag: `h-orig-${k}` }) : null,
-      round.result ? playButton('Что вышло', round.result, { tag: `h-res-${k}`, variant: 'primary' }) : null));
+      round.result ? playButton('Что вышло', round.result, { tag: `h-res-${k}`, variant: 'primary' }) : null,
+      youtubeButton(round.song)));
 }
 
 // ---------- Boot ----------
