@@ -4,9 +4,13 @@
 import * as audio from './audio.js';
 import {
   el, show, button, playButton, waveform, recorder, avatar, playerTag, openModal, closeModal,
-  modalButton, countdown, confetti, logo, plural, kbd, onLeave, PLAYER_COLORS, PLAYER_EMOJIS,
+  modalButton, countdown, confetti, logo, plural, kbd, onLeave, parseSong, songCard, PLAYER_COLORS, PLAYER_EMOJIS,
 } from './ui.js';
 import { SONG_CATEGORIES } from './songs.js';
+import { HAS_SERVER, createHost, qrSvg } from './net.js';
+
+// A phone opens the same site with #join=CODE and becomes a remote microphone.
+const JOIN_CODE = location.hash.match(/^#join=([A-Za-z]{4})$/)?.[1]?.toUpperCase() ?? null;
 
 // ---------- Persistence ----------
 
@@ -32,8 +36,12 @@ const settings = {
   customSongs: load('customSongs', ''),
 };
 
+let rosterTimer = 0;
+
 function saveSettings() {
   for (const [key, value] of Object.entries(settings)) save(key, value);
+  clearTimeout(rosterTimer);
+  rosterTimer = setTimeout(syncRoster, 300);
 }
 
 // ---------- Songs ----------
@@ -43,18 +51,6 @@ const MAX_PLAYERS = 10; // keeps guessers within the 1–8 digit shortcuts
 const SINGER_MAX_SECONDS = 20;
 const MIMIC_MAX_SECONDS = 30;
 
-// "Artist — Title (first words)" -> { artist, title, lyric }
-function parseSong(line) {
-  const parts = line.split(/\s+[—–-]\s+/);
-  let artist = '';
-  let title = line.trim();
-  if (parts.length >= 2) {
-    artist = parts[0].trim();
-    title = parts.slice(1).join(' — ').trim();
-  }
-  const m = title.match(/^(.+?)\s*\(([^()]+)\)$/);
-  return m ? { artist, title: m[1], lyric: m[2] } : { artist, title, lyric: '' };
-}
 
 function customSongs() {
   return settings.customSongs.split('\n').map((s) => s.trim()).filter(Boolean);
@@ -112,7 +108,8 @@ function startGame() {
     const offset = (c % (n - 1)) + 1;
     for (let i = 0; i < n; i++) plan.push({ singer: order[i], mimic: order[(i + offset) % n] });
   }
-  game = { players, plan, index: 0, rounds: [], deck: buildDeck() };
+  game = { id: Date.now().toString(36), players, plan, index: 0, rounds: [], deck: buildDeck() };
+  syncRoster();
   requestWakeLock();
   screenIntro();
 }
@@ -121,6 +118,8 @@ function currentRound() {
   if (!game.rounds[game.index]) {
     game.rounds[game.index] = {
       ...game.plan[game.index],
+      id: `${game.id}-${game.index}`,
+      remote: null, useComputer: false,
       song: null, original: null, reversed: null, attempt: null, result: null,
       guessedBy: undefined, listens: 0,
     };
@@ -155,6 +154,109 @@ function nextRound() {
   game.index++;
   if (game.index >= game.plan.length) screenFinal();
   else screenIntro();
+}
+
+// ---------- Phones ----------
+
+// Name of the screen on display; phone messages are only acted on where they make sense.
+let screenName = '';
+const phoneListeners = new Set();
+
+// Subscribes the screen being built to phone events; unsubscribes when it is left.
+function onPhones(fn) {
+  phoneListeners.add(fn);
+  onLeave(() => phoneListeners.delete(fn));
+}
+
+function notifyPhones(type, data) {
+  for (const fn of [...phoneListeners]) fn(type, data);
+}
+
+const host = HAS_SERVER && !JOIN_CODE ? createHost(handleHostEvent) : null;
+
+function handleHostEvent(type, data) {
+  if (type === 'message') handlePhoneMessage(data);
+  notifyPhones(type, data);
+}
+
+function rosterPlayers() {
+  const list = game
+    ? game.players
+    : settings.players.map((p, i) => ({ name: p.name.trim(), emoji: p.emoji, color: PLAYER_COLORS[i % PLAYER_COLORS.length] })).filter((p) => p.name);
+  return list.map(({ name, emoji, color }) => ({ name, emoji, color }));
+}
+
+function syncRoster() {
+  host?.setRoster(rosterPlayers(), Boolean(game));
+}
+
+function singerPhone(round) {
+  return host?.phoneOf(game.players[round.singer].name) ?? null;
+}
+
+function sendSing(round) {
+  const peerId = singerPhone(round);
+  if (!peerId) return false;
+  if (!round.song) round.song = drawSong();
+  if (round.remote?.peerId !== peerId) round.remote = { peerId, state: 'sent' };
+  host.sendTo(peerId, { t: 'sing', round: round.id, song: round.song, maxSeconds: SINGER_MAX_SECONDS, mimic: game.players[round.mimic].name });
+  return true;
+}
+
+function cancelRemote(round) {
+  if (!round?.remote) return;
+  host?.sendTo(round.remote.peerId, { t: 'cancel' });
+  round.remote = null;
+}
+
+function handlePhoneMessage({ peerId, name, msg }) {
+  if (msg?.t === 'add') {
+    addPlayerFromPhone(String(msg.name || '').trim().slice(0, 16));
+    return;
+  }
+  if (!game) return;
+  const round = game.rounds[game.index];
+  if (!round || msg.round !== round.id || game.players[round.singer].name !== name || screenName !== 'intro') return;
+  if (msg.t === 'skip') {
+    round.song = drawSong();
+    sendSing(round);
+  } else if (msg.t === 'status') {
+    round.remote = { peerId, state: msg.state };
+    notifyPhones('round-status');
+  } else if (msg.t === 'audio') {
+    audio.decodeBuffer(msg).then((buffer) => {
+      if (!game || game.rounds[game.index] !== round || screenName !== 'intro') return;
+      round.original = buffer;
+      round.reversed = audio.reverse(buffer);
+      round.attempt = round.result = null;
+      round.remote = null;
+      host.sendTo(peerId, { t: 'got', round: round.id });
+      audio.jingle('win');
+      screenMimic(round);
+    }).catch(() => {});
+  }
+}
+
+function addPlayerFromPhone(name) {
+  if (!name || game) return;
+  if (settings.players.some((p) => p.name.trim().toLowerCase() === name.toLowerCase())) return;
+  let slot = settings.players.find((p) => !p.name.trim());
+  if (!slot) {
+    if (settings.players.length >= MAX_PLAYERS) return;
+    const taken = new Set(settings.players.map((p) => p.emoji));
+    slot = { name: '', emoji: PLAYER_EMOJIS.find((e) => !taken.has(e)) ?? '🙂' };
+    settings.players.push(slot);
+  }
+  slot.name = name;
+  saveSettings();
+  syncRoster();
+  notifyPhones('players');
+}
+
+function qrBox(url) {
+  const box = el('div', { class: 'qr' });
+  box.innerHTML = qrSvg(url);
+  return box;
 }
 
 // ---------- Wake lock and unload guard ----------
@@ -196,15 +298,6 @@ function scoreboard({ highlight = [] } = {}) {
       highlight.includes(i) ? el('span', { class: 'score-delta' }, '+1') : null)));
 }
 
-function songCard(song, { cls = '' } = {}) {
-  const { title, artist, lyric } = parseSong(song);
-  return el('div', { class: `song-card ${cls}` },
-    el('div', { class: 'song-note' }, '🎵'),
-    el('div', { class: 'song-title' }, title),
-    lyric ? el('div', { class: 'song-lyric' }, '«', lyric, '»') : null,
-    artist ? el('div', { class: 'song-artist' }, artist) : null);
-}
-
 function openMenu() {
   openModal(() => [
     el('h2', {}, 'Пауза'),
@@ -219,7 +312,10 @@ function openMenu() {
 // ---------- Screen: home / setup ----------
 
 function screenHome() {
+  screenName = 'home';
+  if (game) cancelRemote(game.rounds[game.index]);
   game = null;
+  syncRoster();
   wakeLock?.release?.().catch(() => {});
   wakeLock = null;
 
@@ -242,11 +338,21 @@ function screenHome() {
       : `Нужно хотя бы ${MIN_PLAYERS} игрока`;
   }
 
+  // 📱 next to players whose phone is connected; updated in place so typing is not interrupted.
+  const badges = [];
+  function updateBadges() {
+    const names = new Set(host?.namedPhones() ?? []);
+    badges.forEach((b, i) => { b.hidden = !names.has(settings.players[i]?.name.trim()); });
+  }
+
   function renderPlayers(focusIndex) {
+    badges.length = 0;
     playersBox.replaceChildren(...settings.players.map((p, i) => {
+      const badge = el('span', { class: 'phone-badge', title: 'Телефон подключён' }, '📱');
+      badges.push(badge);
       const input = el('input', {
         class: 'player-input', value: p.name, placeholder: `Игрок ${i + 1}`, maxLength: 16,
-        oninput: (e) => { p.name = e.target.value; saveSettings(); updateCounts(); },
+        oninput: (e) => { p.name = e.target.value; saveSettings(); updateCounts(); updateBadges(); },
         onkeydown: (e) => {
           if (e.key !== 'Enter') return;
           e.preventDefault();
@@ -271,6 +377,7 @@ function screenHome() {
           },
         }, p.emoji),
         input,
+        badge,
         settings.players.length > MIN_PLAYERS
           ? el('button', { class: 'icon-btn', type: 'button', title: 'Убрать', onclick: () => { settings.players.splice(i, 1); saveSettings(); renderPlayers(); } }, '✕')
           : null);
@@ -279,6 +386,7 @@ function screenHome() {
       playersBox.append(el('button', { class: 'add-player', type: 'button', onclick: () => addPlayer() }, '+ Добавить игрока'));
     }
     updateCounts();
+    updateBadges();
     if (focusIndex != null) playersBox.querySelectorAll('.player-input')[focusIndex]?.focus();
   }
 
@@ -343,6 +451,7 @@ function screenHome() {
         el('li', {}, el('span', { class: 'rule-icon' }, '🦜'), el('div', {}, el('b', {}, 'Повторяющий'), ' слушает эту абракадабру и старательно её повторяет.')),
         el('li', {}, el('span', { class: 'rule-icon' }, '🤔'), el('div', {}, 'Его попытку снова переворачивают, и ', el('b', {}, 'все угадывают'), ' песню.'))),
       el('div', { class: 'scoring' }, '🏆 Угадавший первым получает ', el('b', {}, '+1'), '. Певец и повторяющий тоже получают по ', el('b', {}, '+1'), ', если песню угадали.'),
+      host ? phonePanel() : null,
       button('Проверить микрофон', { key: 'KeyM', variant: 'ghost', icon: '🎙️', onClick: () => screenSandbox() })),
     el('section', { class: 'card setup' },
       el('h2', {}, 'Игроки ', playersCount),
@@ -356,11 +465,39 @@ function screenHome() {
       el('div', { class: 'circles-row' }, circlesBox, roundsInfo),
       error,
       button('Играть!', { key: 'Enter', variant: 'primary', cls: 'btn-xl btn-start', onClick: start })))]);
+
+  onPhones((type) => {
+    if (type === 'players') renderPlayers();
+    else if (type === 'phones') updateBadges();
+  });
+}
+
+function phonePanel() {
+  const box = el('div', { class: 'phone-panel' });
+  const render = () => {
+    const url = host.joinUrl();
+    if (host.state.status !== 'online' || !url) {
+      box.replaceChildren(el('div', { class: 'muted' }, '📱 Подключаемся к серверу для телефонов…'));
+      return;
+    }
+    const names = host.namedPhones();
+    box.replaceChildren(
+      qrBox(url),
+      el('div', { class: 'phone-text' },
+        el('b', {}, '📱 Пой с телефона'),
+        el('div', { class: 'muted' }, 'Наведи камеру и выбери себя. Когда придёт твоя очередь, песня появится на телефоне, и можно спеть в другой комнате.'),
+        el('div', { class: 'phone-code' }, 'Код игры ', el('b', {}, host.state.room)),
+        names.length ? el('div', { class: 'phone-list' }, names.map((n) => el('span', { class: 'phone-chip' }, '📱 ', n))) : null));
+  };
+  render();
+  onPhones((type) => { if (type === 'status' || type === 'phones') render(); });
+  return box;
 }
 
 // ---------- Screen: microphone check ----------
 
 function screenSandbox(buffer = null) {
+  screenName = 'sandbox';
   const reversed = buffer && audio.reverse(buffer);
   show(() => [el('div', { class: 'sandbox' },
     el('header', { class: 'topbar' },
@@ -384,9 +521,31 @@ function screenSandbox(buffer = null) {
 // ---------- Screen: round intro ----------
 
 function screenIntro() {
+  screenName = 'intro';
   const round = currentRound();
   const singer = game.players[round.singer];
   const mimic = game.players[round.mimic];
+  const peerId = singerPhone(round);
+  const remote = Boolean(peerId) && !round.useComputer;
+  if (remote) sendSing(round);
+  const status = el('div', { class: 'remote-status' });
+  const updateStatus = () => {
+    const STATES = {
+      sent: ['📨', 'Отправили песню на телефон…'],
+      seen: ['👀', `${singer.name} смотрит на песню`],
+      recording: ['🎤', `${singer.name} поёт!`],
+      recorded: ['🎧', `${singer.name} слушает, что получилось`],
+      sending: ['🚀', 'Запись летит на телевизор…'],
+    };
+    const [icon, text] = STATES[round.remote?.state] ?? STATES.sent;
+    status.className = `remote-status state-${round.remote?.state ?? 'sent'}`;
+    status.replaceChildren(el('span', { class: 'remote-icon' }, icon), text);
+  };
+  updateStatus();
+
+  const useComputer = () => { round.useComputer = true; cancelRemote(round); screenIntro(); };
+  const usePhone = () => { round.useComputer = false; screenIntro(); };
+
   show(() => [
     topbar(0),
     el('div', { class: 'stage intro' },
@@ -396,11 +555,30 @@ function screenIntro() {
         el('div', { class: 'duo-arrow' }, '🔄'),
         roleCard(mimic, '🦜', 'Повторяет')),
       el('div', { class: 'guessers' }, el('span', { class: 'muted' }, 'Угадывают: '), guessers(round).map((i) => playerTag(game.players[i]))),
-      el('div', { class: 'banner' },
-        el('span', { class: 'banner-icon' }, '🚪'),
-        el('div', {}, 'Все, кроме ', el('b', { style: { color: singer.color } }, singer.name), ', выходят из комнаты. ', singer.name, ', садись к компьютеру!')),
-      button('Все вышли, показать песню', { key: 'Enter', variant: 'primary', cls: 'btn-xl', onClick: () => screenSinger(round) })),
+      remote
+        ? [el('div', { class: 'banner banner-phone' },
+          el('span', { class: 'banner-icon' }, '📱'),
+          el('div', {}, 'Песня уже на телефоне у ', el('b', { style: { color: singer.color } }, singer.name),
+            '. Уходи туда, где тебя не слышно, и пой! Остальные ждут здесь.')),
+        status,
+        button('Спеть на компьютере', { key: 'KeyK', variant: 'ghost', icon: '💻', onClick: useComputer })]
+        : [el('div', { class: 'intro-local' },
+          el('div', { class: 'banner' },
+            el('span', { class: 'banner-icon' }, '🚪'),
+            el('div', {}, 'Все, кроме ', el('b', { style: { color: singer.color } }, singer.name), ', выходят из комнаты. ', singer.name, ', садись к компьютеру!')),
+          host?.joinUrl() && !peerId
+            ? el('div', { class: 'intro-qr' }, qrBox(host.joinUrl()), el('div', {}, el('b', {}, 'Или спой с телефона'), el('div', { class: 'muted' }, `${singer.name}, отсканируй и выбери себя`)))
+            : null),
+        el('div', { class: 'row center' },
+          button('Все вышли, показать песню', { key: 'Enter', variant: 'primary', cls: 'btn-xl', onClick: () => screenSinger(round) }),
+          peerId ? button('Вернуть на телефон', { key: 'KeyK', variant: 'ghost', icon: '📱', onClick: usePhone }) : null)]),
     el('footer', { class: 'bottom' }, scoreboard())]);
+  // Registered after show(): listeners belong to this screen and are dropped when it is left.
+  onPhones((type, data) => {
+    if (type === 'round-status') updateStatus();
+    else if (type === 'phones' && singerPhone(round) !== peerId) screenIntro();
+    else if (type === 'hello' && data.name === singer.name) screenIntro();
+  });
 }
 
 function roleCard(player, icon, role) {
@@ -413,6 +591,8 @@ function roleCard(player, icon, role) {
 // ---------- Screen: singer ----------
 
 function screenSinger(round) {
+  screenName = 'singer';
+  cancelRemote(round);
   if (!round.song) round.song = drawSong();
   const singer = game.players[round.singer];
   const mimic = game.players[round.mimic];
@@ -456,6 +636,7 @@ function screenSinger(round) {
 // ---------- Screen: mimic ----------
 
 function screenMimic(round) {
+  screenName = 'mimic';
   const singer = game.players[round.singer];
   const mimic = game.players[round.mimic];
   const listens = el('span', { class: 'listens' }, listensText(round.listens));
@@ -503,6 +684,7 @@ function listensText(n) {
 // ---------- Screen: guessing ----------
 
 function screenGuess(round, autoplay) {
+  screenName = 'guess';
   const singer = game.players[round.singer];
   const list = guessers(round);
   const choose = (i) => { round.guessedBy = i; screenReveal(round, true); };
@@ -532,6 +714,7 @@ function screenGuess(round, autoplay) {
 // ---------- Screen: reveal ----------
 
 function screenReveal(round, fresh) {
+  screenName = 'reveal';
   const singer = game.players[round.singer];
   const mimic = game.players[round.mimic];
   const guessed = isGuessed(round);
@@ -581,6 +764,8 @@ function compareItem(label, sub, buffer, tag, key, variant, cls = '') {
 // ---------- Screen: final ----------
 
 function screenFinal() {
+  screenName = 'final';
+  cancelRemote(game.rounds[game.index]);
   const sc = scores();
   const order = [...game.players.keys()].sort((a, b) => sc[b] - sc[a]);
   const rounds = finishedRounds();
@@ -668,4 +853,9 @@ function highlightCard(round, k) {
 
 // ---------- Boot ----------
 
-screenHome();
+if (JOIN_CODE) {
+  import('./phone.js').then((m) => m.startPhone(JOIN_CODE));
+} else {
+  host?.start();
+  screenHome();
+}

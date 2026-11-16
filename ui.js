@@ -228,7 +228,7 @@ export function playButton(label, buffer, { tag, key, variant = 'secondary', onP
  * Big record button with a live level graph and a time ring.
  * onDone(buffer) gets the processed recording.
  */
-export function recorder({ maxSeconds = 20, key = 'Space', onDone, idleText = 'Нажми и пой', hint } = {}) {
+export function recorder({ maxSeconds = 20, key = 'Space', onDone, onStart, idleText = 'Нажми и пой', hint } = {}) {
   const BARS_PER_SECOND = 10;
   const totalBars = maxSeconds * BARS_PER_SECOND;
   const levels = [];
@@ -310,6 +310,7 @@ export function recorder({ maxSeconds = 20, key = 'Space', onDone, idleText = '�
     root.classList.add('recording');
     face.textContent = '■';
     caption.replaceChildren('Идёт запись! Стоп — ', kbd(key));
+    onStart?.();
   }
 
   function end() {
@@ -435,4 +436,28 @@ export function plural(n, one, few, many) {
   if (mod10 === 1 && mod100 !== 11) return one;
   if (mod10 >= 2 && mod10 <= 4 && (mod100 < 12 || mod100 > 14)) return few;
   return many;
+}
+
+// ---------- Songs ----------
+
+// "Artist — Title (first words)" -> { artist, title, lyric }
+export function parseSong(line) {
+  const parts = line.split(/\s+[—–-]\s+/);
+  let artist = '';
+  let title = line.trim();
+  if (parts.length >= 2) {
+    artist = parts[0].trim();
+    title = parts.slice(1).join(' — ').trim();
+  }
+  const m = title.match(/^(.+?)\s*\(([^()]+)\)$/);
+  return m ? { artist, title: m[1], lyric: m[2] } : { artist, title, lyric: '' };
+}
+
+export function songCard(song, { cls = '' } = {}) {
+  const { title, artist, lyric } = parseSong(song);
+  return el('div', { class: `song-card ${cls}` },
+    el('div', { class: 'song-note' }, '🎵'),
+    el('div', { class: 'song-title' }, title),
+    lyric ? el('div', { class: 'song-lyric' }, '«', lyric, '»') : null,
+    artist ? el('div', { class: 'song-artist' }, artist) : null);
 }

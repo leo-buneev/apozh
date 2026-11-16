@@ -257,6 +257,37 @@ export function reverse(buffer) {
   return toBuffer(data, buffer.sampleRate);
 }
 
+// ---------- Transfer encoding (phone -> TV) ----------
+
+// Mono 16-bit PCM, downsampled to at most ~24 kHz (plenty for voice), base64 for JSON.
+export async function encodeBuffer(buffer, maxRate = 24000) {
+  const src = buffer.getChannelData(0);
+  const factor = Math.max(1, Math.floor(buffer.sampleRate / maxRate));
+  const n = Math.floor(src.length / factor);
+  const pcm = new Int16Array(n);
+  for (let i = 0; i < n; i++) {
+    let sum = 0;
+    for (let k = 0; k < factor; k++) sum += src[i * factor + k];
+    const v = Math.max(-1, Math.min(1, sum / factor));
+    pcm[i] = Math.round(v * 32767);
+  }
+  const dataUrl = await new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => resolve(reader.result);
+    reader.onerror = () => reject(reader.error);
+    reader.readAsDataURL(new Blob([pcm.buffer]));
+  });
+  return { rate: buffer.sampleRate / factor, data: String(dataUrl).slice(String(dataUrl).indexOf(',') + 1) };
+}
+
+export async function decodeBuffer({ rate, data }) {
+  const bytes = await (await fetch(`data:application/octet-stream;base64,${data}`)).arrayBuffer();
+  const pcm = new Int16Array(bytes);
+  const samples = new Float32Array(pcm.length);
+  for (let i = 0; i < pcm.length; i++) samples[i] = pcm[i] / 32767;
+  return toBuffer(samples, rate);
+}
+
 // Max absolute amplitude per bucket, normalized to 0..1; used for waveforms.
 export function peaks(buffer, count) {
   const data = buffer.getChannelData(0);
