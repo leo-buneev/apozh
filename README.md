@@ -11,7 +11,7 @@ npm install
 npm start          # http://localhost:8080, PORT overrides
 ```
 
-`server.js` serves the static files and relays messages between the TV and phones over a WebSocket (`/ws`), in memory, one room per TV. Hosted on Railway: https://apozh-production.up.railway.app (service `apozh`, built from this repo with Railpack). Pushes deploy automatically only once the Railway GitHub app has access to the repo; otherwise trigger a deploy in Railway. The GitHub Pages copy redirects there. Without the server the game still works, just without phones.
+`server.js` serves the static files and relays messages between the TV and phones over a WebSocket (`/ws`), in memory, one room per TV. Live at https://apozh.leo-buneev.com (Railway, service `apozh`, built from this repo with Railpack). Pushes deploy automatically only once the Railway GitHub app has access to the repo; otherwise trigger a deploy in Railway. The GitHub Pages copy redirects there. Without the server the game still works, just without phones.
 
 - `app.js`: game flow and screens
 - `ui.js`: DOM helpers, keyboard shortcuts, widgets (recorder, waveform, confetti)
