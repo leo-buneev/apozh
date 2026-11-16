@@ -251,6 +251,27 @@ function toBuffer(samples, rate) {
   return buf;
 }
 
+// A piece of a buffer with short fades, so cuts in the middle of a sound don't click.
+export function slice(buffer, fromSeconds, toSeconds) {
+  const rate = buffer.sampleRate;
+  const data = buffer.getChannelData(0);
+  const out = data.slice(Math.floor(fromSeconds * rate), Math.min(data.length, Math.floor(toSeconds * rate)));
+  const fade = Math.min(Math.floor(rate * 0.01), Math.floor(out.length / 2));
+  for (let i = 0; i < fade; i++) {
+    out[i] *= i / fade;
+    out[out.length - 1 - i] *= i / fade;
+  }
+  return toBuffer(out, rate);
+}
+
+export function concat(buffers) {
+  const total = buffers.reduce((n, b) => n + b.length, 0);
+  const out = new Float32Array(total);
+  let offset = 0;
+  for (const b of buffers) { out.set(b.getChannelData(0), offset); offset += b.length; }
+  return toBuffer(out, buffers[0].sampleRate);
+}
+
 export function reverse(buffer) {
   const data = new Float32Array(buffer.getChannelData(0));
   data.reverse();

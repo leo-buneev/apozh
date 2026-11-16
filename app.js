@@ -4,7 +4,7 @@
 import * as audio from './audio.js';
 import {
   el, show, button, playButton, waveform, recorder, avatar, playerTag, openModal, closeModal,
-  modalButton, countdown, confetti, logo, plural, kbd, onLeave, parseSong, songCard, PLAYER_COLORS, PLAYER_EMOJIS,
+  modalButton, countdown, confetti, logo, plural, kbd, onLeave, bindKey, parseSong, songCard, PLAYER_COLORS, PLAYER_EMOJIS,
 } from './ui.js';
 import { SONG_CATEGORIES } from './songs.js';
 import { HAS_SERVER, createHost, qrSvg } from './net.js';
@@ -33,6 +33,7 @@ const settings = {
   players: load('players', null) ?? Array.from({ length: 4 }, (_, i) => ({ name: '', emoji: PLAYER_EMOJIS[i] })),
   categories: load('categories', null) ?? SONG_CATEGORIES.map((c) => c.id),
   circles: load('circles', 1),
+  pieceMode: load('pieceMode', true),
   customSongs: load('customSongs', ''),
 };
 
@@ -46,7 +47,7 @@ function saveSettings() {
 
 // ---------- Songs ----------
 
-const MIN_PLAYERS = 3;
+const MIN_PLAYERS = 2;
 const MAX_PLAYERS = 10; // keeps guessers within the 1–8 digit shortcuts
 const SINGER_MAX_SECONDS = 20;
 const MIMIC_MAX_SECONDS = 30;
@@ -127,8 +128,15 @@ function currentRound() {
   return game.rounds[game.index];
 }
 
+// With only two players nobody else is left, so the mimic guesses the song.
 function guessers(round) {
-  return [...game.players.keys()].filter((i) => i !== round.singer && i !== round.mimic);
+  const others = [...game.players.keys()].filter((i) => i !== round.singer && i !== round.mimic);
+  return others.length ? others : [round.mimic];
+}
+
+// Everyone who scores when the round is guessed (the guesser, singer and mimic, once each).
+function winnersOf(round) {
+  return isGuessed(round) ? [...new Set([round.guessedBy, round.singer, round.mimic])] : [];
 }
 
 function isGuessed(round) {
@@ -138,10 +146,8 @@ function isGuessed(round) {
 function scores() {
   const result = game.players.map(() => 0);
   for (const r of game.rounds) {
-    if (!r || !isGuessed(r)) continue;
-    result[r.guessedBy]++;
-    result[r.singer]++;
-    result[r.mimic]++;
+    if (!r) continue;
+    for (const i of winnersOf(r)) result[i]++;
   }
   return result;
 }
@@ -336,6 +342,7 @@ function screenHome() {
     roundsInfo.textContent = n >= MIN_PLAYERS
       ? `${rounds} ${plural(rounds, 'раунд', 'раунда', 'раундов')} · примерно ${Math.round(rounds * 2.5)} мин`
       : `Нужно хотя бы ${MIN_PLAYERS} игрока`;
+    if (n === 2) roundsInfo.textContent += ' · вдвоём угадывает повторяющий';
   }
 
   // 📱 next to players whose phone is connected; updated in place so typing is not interrupted.
@@ -554,7 +561,7 @@ function screenIntro() {
         roleCard(singer, '🎤', 'Поёт'),
         el('div', { class: 'duo-arrow' }, '🔄'),
         roleCard(mimic, '🦜', 'Повторяет')),
-      el('div', { class: 'guessers' }, el('span', { class: 'muted' }, 'Угадывают: '), guessers(round).map((i) => playerTag(game.players[i]))),
+      el('div', { class: 'guessers' }, el('span', { class: 'muted' }, guessers(round).length > 1 ? 'Угадывают: ' : 'Угадывает: '), guessers(round).map((i) => playerTag(game.players[i]))),
       remote
         ? [el('div', { class: 'banner banner-phone' },
           el('span', { class: 'banner-icon' }, '📱'),
@@ -635,46 +642,120 @@ function screenSinger(round) {
 
 // ---------- Screen: mimic ----------
 
+const PIECE_SECONDS = 3;
+
+// The reversed original cut into ~3 s pieces; takes are the mimic's recordings per piece.
+function piecesOf(round) {
+  if (round.pieces?.source !== round.reversed) {
+    const duration = round.reversed.duration;
+    const count = Math.max(1, Math.round(duration / PIECE_SECONDS));
+    const len = duration / count;
+    round.pieces = {
+      source: round.reversed,
+      list: Array.from({ length: count }, (_, i) => audio.slice(round.reversed, i * len, (i + 1) * len)),
+      takes: Array(count).fill(null),
+      current: 0,
+    };
+  }
+  return round.pieces;
+}
+
 function screenMimic(round) {
   screenName = 'mimic';
   const singer = game.players[round.singer];
   const mimic = game.players[round.mimic];
-  const listens = el('span', { class: 'listens' }, listensText(round.listens));
+  const piecesMode = settings.pieceMode;
+  const setMode = (on) => { settings.pieceMode = on; saveSettings(); screenMimic(round); };
 
   show(() => [
     topbar(1),
     el('div', { class: 'stage mimic' },
       el('h1', { class: 'title' }, avatar(mimic, 'lg'), el('span', {}, el('span', { style: { color: mimic.color } }, mimic.name), ', твой выход!')),
       el('p', { class: 'subtitle' }, 'Зовите всех обратно. ', singer.name, ', ни слова о песне! 🤐'),
-      el('div', { class: 'mimic-layout' },
-        el('div', { class: 'card step-card' },
-          el('div', { class: 'step-num' }, '1'),
-          el('h3', {}, 'Слушай абракадабру'),
-          waveform(round.reversed, { tag: 'rev', height: 100, cls: 'wave-alt' }),
-          el('div', { class: 'row' },
-            playButton('Слушать', round.reversed, {
-              tag: 'rev', key: 'KeyP', variant: round.attempt ? 'secondary' : 'primary',
-              onPlay: () => { round.listens++; listens.textContent = listensText(round.listens); },
-            }),
-            listens)),
-        el('div', { class: 'card step-card' },
-          el('div', { class: 'step-num' }, '2'),
-          el('h3', {}, 'Повтори как можно точнее'),
-          recorder({
-            maxSeconds: MIMIC_MAX_SECONDS,
-            idleText: round.attempt ? 'Записать заново' : 'Записать повтор',
-            hint: 'Звуки, мелодию, интонацию. Слушать можно сколько угодно раз.',
-            onDone: (buffer) => {
-              round.attempt = buffer;
-              round.result = audio.reverse(buffer);
-              screenMimic(round);
-            },
-          }),
-          round.attempt
-            ? el('div', { class: 'row pop-in' },
-              playButton('Твоя попытка', round.attempt, { tag: 'attempt', key: 'KeyA' }),
-              button('Переворачиваем!', { key: 'Enter', variant: 'primary', icon: '🔄', onClick: () => screenGuess(round, true) }))
-            : null)))]);
+      el('div', { class: 'segmented mode-switch' },
+        el('button', { type: 'button', class: piecesMode ? 'on' : '', onclick: () => setMode(true) }, '🧩 По кусочкам'),
+        el('button', { type: 'button', class: piecesMode ? '' : 'on', onclick: () => setMode(false) }, '🎞️ Целиком')),
+      piecesMode ? mimicPieces(round) : mimicWhole(round))]);
+}
+
+function readyRow(round) {
+  return el('div', { class: 'row pop-in' },
+    playButton('Вся попытка', round.attempt, { tag: 'attempt', key: 'KeyA' }),
+    button('Переворачиваем!', { key: 'Enter', variant: 'primary', icon: '🔄', onClick: () => screenGuess(round, true) }));
+}
+
+function mimicWhole(round) {
+  const listens = el('span', { class: 'listens' }, listensText(round.listens));
+  return el('div', { class: 'mimic-layout' },
+    el('div', { class: 'card step-card' },
+      el('div', { class: 'step-num' }, '1'),
+      el('h3', {}, 'Слушай абракадабру'),
+      waveform(round.reversed, { tag: 'rev', height: 100, cls: 'wave-alt' }),
+      el('div', { class: 'row' },
+        playButton('Слушать', round.reversed, {
+          tag: 'rev', key: 'KeyP', variant: round.attempt ? 'secondary' : 'primary',
+          onPlay: () => { round.listens++; listens.textContent = listensText(round.listens); },
+        }),
+        listens)),
+    el('div', { class: 'card step-card' },
+      el('div', { class: 'step-num' }, '2'),
+      el('h3', {}, 'Повтори как можно точнее'),
+      recorder({
+        maxSeconds: MIMIC_MAX_SECONDS,
+        idleText: round.attempt ? 'Записать заново' : 'Записать повтор',
+        hint: 'Звуки, мелодию, интонацию. Слушать можно сколько угодно раз.',
+        onDone: (buffer) => {
+          round.attempt = buffer;
+          round.result = audio.reverse(buffer);
+          screenMimic(round);
+        },
+      }),
+      round.attempt ? readyRow(round) : null));
+}
+
+function mimicPieces(round) {
+  const p = piecesOf(round);
+  const i = p.current;
+  const total = p.list.length;
+  const recorded = p.takes.filter(Boolean).length;
+  const select = (k) => { if (k >= 0 && k < total) { p.current = k; screenMimic(round); } };
+  bindKey('ArrowLeft', () => select(i - 1));
+  bindKey('ArrowRight', () => select(i + 1));
+
+  return el('div', { class: 'mimic-layout' },
+    el('div', { class: 'card step-card' },
+      el('div', { class: 'step-num' }, '1'),
+      el('h3', {}, `Слушай кусочек ${i + 1} из ${total}`),
+      el('div', { class: 'pieces' }, p.list.map((_, k) => el('button', {
+        type: 'button', class: 'piece' + (k === i ? ' current' : '') + (p.takes[k] ? ' done' : ''),
+        onclick: () => select(k),
+      }, p.takes[k] ? '✓' : String(k + 1)))),
+      waveform(p.list[i], { tag: `piece-${i}`, height: 90, cls: 'wave-alt' }),
+      el('div', { class: 'row' },
+        playButton('Кусочек', p.list[i], { tag: `piece-${i}`, key: 'KeyP', variant: p.takes[i] ? 'secondary' : 'primary' }),
+        playButton('Всё целиком', round.reversed, { tag: 'rev', key: 'KeyL' }),
+        p.takes[i] ? playButton('Мой повтор', p.takes[i], { tag: `take-${i}`, key: 'KeyM' }) : null)),
+    el('div', { class: 'card step-card' },
+      el('div', { class: 'step-num' }, '2'),
+      el('h3', {}, `Повтори кусочек ${i + 1}`),
+      recorder({
+        maxSeconds: 12,
+        idleText: p.takes[i] ? 'Перезаписать' : 'Записать кусочек',
+        hint: 'Куски склеятся по порядку. Слушать и перезаписывать можно сколько угодно; ← → переключают кусочки.',
+        onDone: (buffer) => {
+          p.takes[i] = buffer;
+          if (p.takes.every(Boolean)) {
+            round.attempt = audio.concat(p.takes);
+            round.result = audio.reverse(round.attempt);
+          }
+          const next = p.takes.findIndex((t) => !t);
+          p.current = next === -1 ? i : next;
+          screenMimic(round);
+        },
+      }),
+      p.takes.every(Boolean)
+        ? readyRow(round)
+        : el('div', { class: 'muted' }, `Записано ${recorded} из ${total}`)));
 }
 
 function listensText(n) {
@@ -697,9 +778,11 @@ function screenGuess(round, autoplay) {
         waveform(round.result, { tag: 'result', height: 140, bars: 160 }),
         el('div', { class: 'row center' }, playButton('Ещё раз', round.result, { tag: 'result', key: 'KeyP', onPlay: () => stopCountdown?.() }))),
       el('div', { class: 'guess-who' },
-        el('h3', {}, 'Кто угадал первым? ', el('span', { class: 'muted' }, 'Решает ', singer.name)),
+        list.length > 1
+          ? el('h3', {}, 'Кто угадал первым? ', el('span', { class: 'muted' }, 'Решает ', singer.name))
+          : el('h3', {}, game.players[list[0]].name, ', угадал(а)? ', el('span', { class: 'muted' }, 'Решает ', singer.name)),
         el('div', { class: 'guess-buttons' },
-          list.map((i, k) => button(game.players[i].name, {
+          list.map((i, k) => button(list.length > 1 ? game.players[i].name : 'Угадал(а)!', {
             key: k < 9 ? `Digit${k + 1}` : undefined,
             icon: avatar(game.players[i], 'sm'),
             cls: 'btn-player',
@@ -718,7 +801,7 @@ function screenReveal(round, fresh) {
   const singer = game.players[round.singer];
   const mimic = game.players[round.mimic];
   const guessed = isGuessed(round);
-  const winners = guessed ? [round.guessedBy, round.singer, round.mimic] : [];
+  const winners = winnersOf(round);
   const last = game.index >= game.plan.length - 1;
 
   show(() => [
